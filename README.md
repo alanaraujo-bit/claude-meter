@@ -15,7 +15,7 @@ nem a conta ativa nem o horário do reset. Este projeto reconstrói as duas cois
 ```
 Claude Code (máquina local)
    └─ hook UserPromptSubmit  ──POST──►  Vercel (Next.js)  ──►  Postgres (Railway)
-      agent/hook.js                     app/api/ingest              │
+      agent/hook.cjs                     app/api/ingest              │
                                         app/api/status  ◄───────────┘
                                         app/page.js (painel/PWA)
 ```
@@ -95,7 +95,7 @@ E o hook em `~/.claude/settings.json`:
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "node CAMINHO/agent/hook.js", "async": true, "timeout": 10 }
+          { "type": "command", "command": "node CAMINHO/agent/hook.cjs", "async": true, "timeout": 30 }
         ]
       }
     ]
@@ -104,6 +104,10 @@ E o hook em `~/.claude/settings.json`:
 ```
 
 Sem `meter-config.json` o hook só grava o ledger local e não envia nada.
+
+> A extensão `.cjs` é obrigatória. O `package.json` declara `"type": "module"`
+> por causa do Next, o que faria o Node tratar um `hook.js` como ES module e
+> quebrar no `require` — silenciosamente, já que o hook engole os próprios erros.
 
 ## Rotas
 
