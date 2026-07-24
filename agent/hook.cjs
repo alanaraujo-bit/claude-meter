@@ -58,6 +58,49 @@ function activeAccount() {
   }
 }
 
+/**
+ * Limite REAL do plano, direto do cache que o próprio Claude Code mantém em
+ * ~/.claude.json → cachedUsageUtilization.
+ *
+ * Isto substitui a janela de 5h que antes era derivada dos timestamps. A
+ * derivação errava sistematicamente: ela assume que a janela começou no
+ * primeiro evento observado, mas a coleta quase sempre começa no meio de uma
+ * janela já em andamento — o reset saía atrasado pelo tamanho desse pedaço
+ * que não foi visto.
+ *
+ * `resets_at` é absoluto e nunca envelhece. `utilization` é um retrato do
+ * instante `fetchedAtMs`, então mandamos esse carimbo junto para a interface
+ * poder dizer há quanto tempo o número foi medido.
+ */
+function officialUsage(email) {
+  try {
+    const d = JSON.parse(fs.readFileSync(CLAUDE_JSON, 'utf8'));
+    const c = d?.cachedUsageUtilization;
+    const u = c?.utilization;
+    if (!c?.fetchedAtMs || !u) return null;
+
+    // O cache só existe para a conta logada agora. Se o uuid do cache não bate
+    // com o da sessão atual, o dado é de outra conta — descartar evita
+    // carimbar o consumo de uma conta no cartão da outra.
+    if (c.accountUuid && d?.oauthAccount?.accountUuid && c.accountUuid !== d.oauthAccount.accountUuid) {
+      return null;
+    }
+
+    const pick = (o) =>
+      o && typeof o.utilization === 'number' && o.resets_at
+        ? { pct: o.utilization, resetsAt: o.resets_at }
+        : null;
+
+    const fiveHour = pick(u.five_hour);
+    const sevenDay = pick(u.seven_day);
+    if (!fiveHour && !sevenDay) return null;
+
+    return { account: email, fetchedAt: new Date(c.fetchedAtMs).toISOString(), fiveHour, sevenDay };
+  } catch {
+    return null;
+  }
+}
+
 function recordLedger(sessionId, email) {
   if (!sessionId || !email) return;
   try {
@@ -184,14 +227,14 @@ async function eventsFrom(file, ledger, sinceMs, seen, events) {
   }
 }
 
-async function post(url, token, events) {
+async function post(url, token, body) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ events }),
+      body: JSON.stringify(body),
       signal: ctrl.signal,
     });
     return res.ok;
@@ -216,6 +259,11 @@ async function main() {
   const cfg = readJson(CONFIG, null);
   if (!cfg?.url || !cfg?.token) return; // ainda não configurado: só o ledger roda
 
+  // O limite oficial vai em toda execução, mesmo sem evento novo: é ele que
+  // manda no countdown, e o reset precisa estar correto no painel mesmo em
+  // sessão parada.
+  const usage = email ? officialUsage(email) : null;
+
   const cursor = readJson(CURSOR, {});
   const lastTs = Number(cursor.lastTs) || 0;
   const sinceMs = lastTs ? lastTs - OVERLAP_MS : 0;
@@ -230,14 +278,19 @@ async function main() {
       /* arquivo ilegível: pula */
     }
   }
-  if (events.length === 0) return;
+  if (events.length === 0) {
+    if (usage) await post(cfg.url, cfg.token, { events: [], usage });
+    return;
+  }
 
   events.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
 
   let maxOk = lastTs;
   for (let i = 0; i < events.length; i += CHUNK) {
     const batch = events.slice(i, i + CHUNK);
-    if (!(await post(cfg.url, cfg.token, batch))) break; // falhou: cursor não avança, tenta de novo depois
+    // O snapshot de limite viaja só no primeiro lote — é estado atual, não série.
+    const body = i === 0 ? { events: batch, usage } : { events: batch };
+    if (!(await post(cfg.url, cfg.token, body))) break; // falhou: cursor não avança, tenta depois
     maxOk = Math.max(maxOk, Date.parse(batch[batch.length - 1].ts));
   }
 

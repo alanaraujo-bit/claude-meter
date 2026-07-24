@@ -30,6 +30,14 @@ export async function GET() {
          FROM usage_events GROUP BY account`
     );
 
+    // Limite oficial do plano — a fonte de verdade do countdown e do percentual.
+    const { rows: limits } = await query(
+      `SELECT account, fetched_at, five_hour_pct, five_hour_resets_at,
+              seven_day_pct, seven_day_resets_at
+         FROM usage_limits`
+    );
+    const limitOf = new Map(limits.map((l) => [l.account, l]));
+
     const summary = summarize(rows);
     const byAccount = new Map(totals.map((t) => [t.account, t]));
     for (const acc of summary.accounts) {
@@ -38,6 +46,24 @@ export async function GET() {
       acc.firstSeen = t?.first_seen ?? null;
       // Deixa explícito que `totalUsd` cobre só o lookback, não a vida toda.
       acc.periodDays = LOOKBACK_DAYS;
+
+      const l = limitOf.get(acc.account);
+      acc.limits = l
+        ? {
+            // `fetchedAt` é o carimbo da medição, não de agora: o percentual
+            // envelhece entre uma busca e outra do cliente, e a interface
+            // precisa poder dizer isso em vez de fingir tempo real.
+            fetchedAt: l.fetched_at,
+            fiveHour:
+              l.five_hour_pct != null
+                ? { pct: l.five_hour_pct, resetsAt: l.five_hour_resets_at }
+                : null,
+            sevenDay:
+              l.seven_day_pct != null
+                ? { pct: l.seven_day_pct, resetsAt: l.seven_day_resets_at }
+                : null,
+          }
+        : null;
     }
 
     summary.insights = insightsFor(summary);

@@ -19,6 +19,22 @@ CREATE TABLE IF NOT EXISTS usage_events (
 CREATE INDEX IF NOT EXISTS usage_events_account_ts_idx ON usage_events (account, ts DESC);
 CREATE INDEX IF NOT EXISTS usage_events_ts_idx         ON usage_events (ts DESC);
 
+-- Limite REAL do plano, copiado do cache que o próprio Claude Code mantém
+-- (~/.claude.json → cachedUsageUtilization). É a fonte de verdade do countdown
+-- e do percentual: a janela derivada dos timestamps errava porque a coleta
+-- começa no meio de uma janela já em andamento.
+--
+-- Uma linha por conta, sobrescrita: interessa o estado atual, não a série.
+CREATE TABLE IF NOT EXISTS usage_limits (
+  account              TEXT PRIMARY KEY,
+  fetched_at           TIMESTAMPTZ NOT NULL,
+  five_hour_pct        INT,
+  five_hour_resets_at  TIMESTAMPTZ,
+  seven_day_pct        INT,
+  seven_day_resets_at  TIMESTAMPTZ,
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Inscrições de Web Push. O endpoint é único por dispositivo/navegador.
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   endpoint    TEXT PRIMARY KEY,
