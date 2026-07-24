@@ -18,3 +18,24 @@ CREATE TABLE IF NOT EXISTS usage_events (
 -- O dashboard sempre consulta por conta dentro de uma faixa de tempo.
 CREATE INDEX IF NOT EXISTS usage_events_account_ts_idx ON usage_events (account, ts DESC);
 CREATE INDEX IF NOT EXISTS usage_events_ts_idx         ON usage_events (ts DESC);
+
+-- Inscrições de Web Push. O endpoint é único por dispositivo/navegador.
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  endpoint    TEXT PRIMARY KEY,
+  p256dh      TEXT NOT NULL,
+  auth        TEXT NOT NULL,
+  label       TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_sent_at TIMESTAMPTZ
+);
+
+-- Impede notificar a mesma coisa repetidas vezes. A chave é
+-- (conta + nível + início da janela): mudou de nível ou virou a janela,
+-- pode notificar de novo; senão, silêncio.
+CREATE TABLE IF NOT EXISTS alert_state (
+  account       TEXT NOT NULL,
+  window_start  TIMESTAMPTZ NOT NULL,
+  level         TEXT NOT NULL,
+  sent_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (account, window_start, level)
+);

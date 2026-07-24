@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
 import { query, ensureSchema } from '../../../lib/db.js';
+import { summarize } from '../../../lib/windows.js';
+import { insightsFor } from '../../../lib/insights.js';
+import { maybeAlert } from '../../../lib/push.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -81,9 +84,30 @@ export async function POST(req) {
     values
   );
 
+  // O alerta é avaliado aqui, na chegada dos dados — é o único momento em que
+  // o estado muda. Assim a notificação chega enquanto você está usando, sem
+  // precisar de cron rodando a cada minuto.
+  let alerts = null;
+  if (result.rowCount > 0) {
+    try {
+      const { rows: recent } = await query(
+        `SELECT ts, account, model,
+                input_tokens, output_tokens, cache_write_5m, cache_write_1h, cache_read
+           FROM usage_events
+          WHERE ts >= now() - interval '15 days'
+          ORDER BY ts ASC`
+      );
+      const summary = summarize(recent);
+      alerts = await maybeAlert(summary, insightsFor(summary));
+    } catch {
+      // Falha ao notificar nunca pode derrubar a ingestão — o dado já está salvo.
+    }
+  }
+
   return NextResponse.json({
     inserted: result.rowCount,
     received: events.length,
     duplicates: rows.length - result.rowCount,
+    alerts: alerts?.length ?? 0,
   });
 }
